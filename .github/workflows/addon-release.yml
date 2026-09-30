@@ -1,0 +1,82 @@
+# Reusable release workflow for geekoo-wow WoW addons.
+#
+# Call it from an addon repo on a version tag push, pinned to @v1:
+#
+#   jobs:
+#     release:
+#       uses: geekoo-wow/.github/.github/workflows/addon-release.yml@v1
+#       permissions:
+#         contents: write
+#       with:
+#         addon-name: AddonName
+#       secrets: inherit
+#
+# Convention:
+# - Release notes come from "Changelog: <sentence>" lines in the commit
+#   messages since the previous tag (see CONTRIBUTING.md). They are written
+#   to an untracked RELEASE_NOTES.md, which the BigWigs packager picks up
+#   through `manual-changelog` in the addon's .pkgmeta.
+# - BigWigsMods/packager builds the zip and publishes it: always as a GitHub
+#   release, to CurseForge when the TOC has X-Curse-Project-ID, and to Wago
+#   when it has X-Wago-ID.
+#
+# The caller must grant `contents: write` (a called workflow cannot have more
+# permissions than its caller) and pass `secrets: inherit` so the org secrets
+# CF_API_KEY and WAGO_API_TOKEN reach the packager.
+
+name: Addon release
+
+on:
+  workflow_call:
+    inputs:
+      addon-name:
+        description: Addon name, used as the heading of the release notes.
+        type: string
+        required: true
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the GitHub release
+    steps:
+      # Full history and tags: the notes need the previous tag, and the
+      # packager derives the version from the annotated tag.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate RELEASE_NOTES.md
+        env:
+          # Passed through the environment, never interpolated into the
+          # script, so the input cannot inject shell.
+          ADDON_NAME: ${{ inputs.addon-name }}
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          prev="$(git describe --tags --abbrev=0 "${tag}^" 2>/dev/null || true)"
+          if [ -n "$prev" ]; then range="${prev}..${tag}"; else range="${tag}"; fi
+          {
+            echo "# ${ADDON_NAME} ${tag}"
+            echo ""
+            # Match "Changelog:" lines anywhere in the body, not via %(trailers):
+            # git only treats the last paragraph as trailers, so lines followed
+            # by a blank line and then Co-Authored-By would be silently dropped.
+            git log "$range" --no-merges --reverse --format='%B' \
+              | sed -n 's/^Changelog:[[:space:]]*//p' \
+              | sed '/^[[:space:]]*$/d' | sed 's/^/- /'
+          } > RELEASE_NOTES.md
+          # Heading + blank line only: no user-facing changes in this range.
+          if [ "$(wc -l < RELEASE_NOTES.md)" -le 2 ]; then
+            echo "- Maintenance release." >> RELEASE_NOTES.md
+          fi
+          cat RELEASE_NOTES.md
+
+      # Uploads are skipped per target when its secret is empty or the TOC
+      # lacks the matching project ID.
+      - uses: BigWigsMods/packager@v2
+        with:
+          pandoc: "false"
+        env:
+          GITHUB_OAUTH: ${{ secrets.GITHUB_TOKEN }}
+          CF_API_KEY: ${{ secrets.CF_API_KEY }}
+          WAGO_API_TOKEN: ${{ secrets.WAGO_API_TOKEN }}

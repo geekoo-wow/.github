@@ -1,0 +1,100 @@
+# Reusable CI workflow for geekoo-wow WoW addons (optional).
+#
+# Call it from an addon repo on push / pull_request, pinned to @v1:
+#
+#   jobs:
+#     ci:
+#       uses: geekoo-wow/.github/.github/workflows/addon-ci.yml@v1
+#       with:
+#         addon-name: AddonName
+#         test-command: lua5.1 tests/run.lua
+#
+# - check: runs luacheck when the repo has a .luacheckrc, and the test
+#   command when one is given. Repos with neither pass trivially.
+# - package: on pushes, builds the addon with the BigWigs packager without
+#   uploading anything, and keeps the unzipped addon folder as an artifact
+#   that can be dropped straight into Interface/AddOns.
+
+name: Addon CI
+
+on:
+  workflow_call:
+    inputs:
+      addon-name:
+        description: Addon name, used as the artifact name prefix.
+        type: string
+        required: true
+      test-command:
+        description: Command that runs the tests, e.g. "lua5.1 tests/run.lua". Empty to skip.
+        type: string
+        default: ""
+      package:
+        description: Build a test package and upload it as an artifact (pushes only).
+        type: boolean
+        default: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect .luacheckrc
+        id: detect
+        run: |
+          if [ -f .luacheckrc ]; then
+            echo "luacheck=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "luacheck=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # WoW runs Lua 5.1, so lint and test against it.
+      - name: Install Lua 5.1 and luacheck
+        if: steps.detect.outputs.luacheck == 'true' || inputs.test-command != ''
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y lua5.1 liblua5.1-0-dev luarocks
+          sudo luarocks --lua-version=5.1 install luacheck
+
+      - name: Luacheck
+        if: steps.detect.outputs.luacheck == 'true'
+        run: luacheck .
+
+      - name: Tests
+        if: inputs.test-command != ''
+        env:
+          # Passed through the environment, never interpolated into the
+          # script.
+          TEST_COMMAND: ${{ inputs.test-command }}
+        run: eval "$TEST_COMMAND"
+
+  package:
+    needs: check
+    if: inputs.package && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # Full history and tags: the packager derives the version from them.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # -d: build only, upload nowhere.
+      - uses: BigWigsMods/packager@v2
+        with:
+          args: -d
+          pandoc: "false"
+
+      # Leave the zip out so the download is the addon folder itself rather
+      # than a zip inside the artifact zip. .release is a hidden directory,
+      # which upload-artifact skips unless told otherwise.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.addon-name }}-${{ github.sha }}
+          path: |
+            .release/
+            !.release/*.zip
+          include-hidden-files: true

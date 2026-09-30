@@ -1,0 +1,5 @@
+{
+  "name": "WoW addon release",
+  "description": "Package and publish a WoW addon on a version tag, with release notes built from Changelog: lines in commit messages.",
+  "categories": ["Lua"]
+}

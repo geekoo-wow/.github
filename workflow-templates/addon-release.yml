@@ -1,0 +1,12 @@
+name: Release
+on:
+  push:
+    tags: ["v*"]
+jobs:
+  release:
+    uses: geekoo-wow/.github/.github/workflows/addon-release.yml@v1
+    permissions:
+      contents: write
+    with:
+      addon-name: AddonName   # heading of the release notes
+    secrets: inherit
